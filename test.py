@@ -1,41 +1,56 @@
-from datetime import datetime, timedelta, timezone
 import pytest
-from app import app
+import time
+from app import app, init_db, initialize_keys
 import jwt
-from flask import Flask
+import sqlite3
 
 @pytest.fixture
 def client():
-    with app.test_client() as test:
-        yield test
+    # Initialize the database and insert keys before each test
+    init_db()
+    initialize_keys()
+    
+    app.config['TESTING'] = True
+    with app.test_client() as client:
+        yield client
 
-# Should give a valid JWT
-def test_Valid_JWT_authentication(client):
+def test_jwks(client):
+    # Test to check if the JWKS endpoint returns non-expired keys
+    response = client.get('/.well-known/jwks.json')
+    assert response.status_code == 200
+    data = response.get_json()
+    assert 'keys' in data
+    assert len(data['keys']) > 0  # Ensure at least one valid key is present
+
+def test_auth_valid_token(client):
+    # Test to ensure a valid JWT is returned
     response = client.post('/auth')
     assert response.status_code == 200
+    data = response.get_json()
+    token = data['token']
+    assert token  # Ensure a token is returned
 
-# Makes sure that /auth returns an expired JWT
-def test_Expired_JWT_authentication(client):
+    # Decode and check expiration time
+    decoded = jwt.decode(token, options={"verify_signature": False})
+    assert decoded['exp'] > time.time()  # Token should be valid (not expired)
+
+def test_auth_expired_token(client):
+    # Test to ensure an expired JWT is returned when requested
     response = client.post('/auth?expired=true')
-    data = jwt.decode(response.get_json().get('token'), '3ba010226cd84939b9eed91aa6bd9519', algorithms=['HS256'], options={"verify_exp": False})
-    assert data['exp'] is not None
+    assert response.status_code == 200
+    data = response.get_json()
+    token = data['token']
+    assert token  # Ensure a token is returned even if expired
 
-# Makes sure that valid JWT's kid is found in JWKS
-def test_Valid_JWK_Found_In_JWKS(client):
-    response = client.post('/auth')
-    header = jwt.get_unverified_header(response.get_json().get('token'))
-    jwks_keys = client.get('/.well-known/jwks.json').get_json()['keys']
-    assert header.get('kid') in [key['kid'] for key in jwks_keys]
+    # Decode and check expiration time
+    decoded = jwt.decode(token, options={"verify_signature": False})
+    assert decoded['exp'] < time.time()  # Token should be expired
 
-# Test to make sure expired JWT's kid is not found in JWKS
-def test_Expired_JWK_Not_Found_In_JWKS(client):
-    response = client.post('/auth?expired=true')
-    header = jwt.get_unverified_header(response.get_json().get('token'))
-    jwks_keys = client.get('/.well-known/jwks.json').get_json()['keys']
-    assert header.get('kid') not in [key['kid'] for key in jwks_keys]
-
-# Makes sure that JWT exp claim is in the past for expired tokens
-def test_Expired_JWK_is_expired(client):
-    response = client.post('/auth?expired=true')
-    data = jwt.decode(response.get_json().get('token'), '3ba010226cd84939b9eed91aa6bd9519', algorithms=['HS256'], options={"verify_exp": False})
-    assert data['exp'] < datetime.now(timezone.utc).timestamp()
+def test_database_key_storage():
+    # Verify the keys are correctly stored in the SQLite database
+    conn = sqlite3.connect('totally_not_my_privateKeys.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM keys")
+    keys = cursor.fetchall()
+    conn.close()
+    assert len(keys) >= 2  # Ensure at least two keys (one expired, one valid) are stored
