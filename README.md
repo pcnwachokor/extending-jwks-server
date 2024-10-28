@@ -1,9 +1,14 @@
 # jwks-server
-Developed a RESTful JWKS server that provides public keys with unique identifiers (kid) for verifying JSON Web Tokens (JWTs).
+Extension of previous jwks server, with SQLite integration for backend storage.
 
 Precious Nwachokor pcn0031
 11584868
 
 Requires
-- python3
-- pip
+- python3, pip, flask, sqlite, pyjwt, jwcrypto, pytest, and cryptography
+
+Running Server
+- python3 app.py
+
+Testing
+- pytest test.py
